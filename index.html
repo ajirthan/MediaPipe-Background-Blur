@@ -1,1 +1,192 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <script src="https://docs.opencv.org/3.4.1/opencv.js"></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"
+      crossorigin="anonymous"
+    ></script>
 
+    <script type="module">
+      var videoElement;
+      var canvasElement;
+      var canvasCtx;
+
+      var dstWidth = 0;
+      var dstHeight = 0;
+
+      var canvasElementCV;
+      var canvasCtxCV;
+
+      var selfieSegmentation;
+      var faceMesh;
+
+      let initialized = false;
+      var cx = 0;
+      var cy = 0;
+      var prevDx = 0;
+      var prevDy = 0;
+      var scale = 1.38;
+      var prevWidth = 0;
+
+      window.onload = function () {
+        videoElement = document.getElementsByClassName("input_video")[0];
+        canvasElement = document.getElementById("output_canvas");
+        canvasCtx = canvasElement.getContext("2d");
+        canvasElementCV = document.getElementById("cv_canvas");
+        canvasCtxCV = canvasElementCV.getContext("2d");
+
+        selfieSegmentation = new SelfieSegmentation({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
+          },
+        });
+
+        selfieSegmentation.setOptions({
+          modelSelection: 0,
+        });
+
+        selfieSegmentation.onResults(onSelfieResults);
+
+        faceMesh = new FaceMesh({
+          locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`;
+          },
+        });
+        faceMesh.setOptions({
+          maxNumFaces: 1,
+          refineLandmarks: false,
+          minDetectionConfidence: 0.5,
+          minTrackingConfidence: 0.5,
+        });
+        faceMesh.onResults(onFaceResults);
+
+        var camera = new Camera(videoElement, {
+          onFrame: async () => {
+            await faceMesh.send({ image: videoElement });
+            await selfieSegmentation.send({ image: videoElement });
+          },
+          width: 640,
+          height: 360,
+        });
+        camera.start();
+      };
+      function onFaceResults(results) {
+        if (results.multiFaceLandmarks) {
+          for (const landmarks of results.multiFaceLandmarks) {
+            var margin = (dstWidth - canvasElement.width) / 2;
+            var halfWidth = dstWidth / 2;
+            var halfHeight = dstHeight / 2;
+
+            cx = landmarks[1].x * dstWidth;
+
+            var delta = cx - halfWidth;
+
+            if (delta > margin) {
+              cx = margin + halfWidth;
+            } else if (-delta > margin) {
+              cx = halfWidth - margin;
+            }
+
+            cy = (landmarks[1].y - 0.05) * dstHeight;
+            delta = cy - halfHeight;
+
+            margin = (dstHeight - canvasElement.height) / 2;
+            if (delta > margin) {
+              cy = margin + halfHeight;
+            } else if (-delta > margin) {
+              cy = halfHeight - margin;
+            }
+          }
+        }
+      }
+      function onSelfieResults(results) {
+        if (!initialized || prevWidth != results.image.width) {
+          initialized = true;
+          canvasElement.width = results.image.width * 1.5;
+          canvasElement.height = results.image.height * 1.5;
+          dstWidth = canvasElement.width * scale;
+          dstHeight = canvasElement.height * scale;
+          canvasElementCV.width = results.image.width;
+          canvasElementCV.height = results.image.height;
+        }
+
+        canvasCtxCV.drawImage(
+          results.image,
+          0,
+          0,
+          canvasElementCV.width,
+          canvasElementCV.height,
+        );
+        let src = cv.imread(canvasElementCV);
+        let dst = new cv.Mat();
+
+        let ksize = new cv.Size(11, 11);
+        let anchor = new cv.Point(-1, -1);
+        cv.blur(src, dst, ksize, anchor, cv.BORDER_DEFAULT);
+
+        const imgData = new ImageData(
+          new Uint8ClampedArray(dst.data, dst.cols, dst.rows),
+          dst.cols,
+          dst.rows,
+        );
+
+        canvasCtxCV.putImageData(imgData, 0, 0);
+
+        src.delete();
+        dst.delete();
+
+        var dx = canvasElement.width / 2 - cx;
+        var dy = canvasElement.height / 2 - cy;
+
+        dx = 0.1 * dx + 0.9 * prevDx;
+        dy = 0.1 * dy + 0.9 * prevDy;
+        prevDx = dx;
+        prevDy = dy;
+
+        canvasCtx.save();
+        canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+        canvasCtx.translate(dx, dy);
+
+        canvasCtx.drawImage(
+          results.segmentationMask,
+          0,
+          0,
+          dstWidth,
+          dstHeight,
+        );
+
+        canvasCtx.globalCompositeOperation = "source-in";
+        canvasCtx.drawImage(results.image, 0, 0, dstWidth, dstHeight);
+
+        canvasCtx.globalCompositeOperation = "destination-atop";
+        canvasCtx.drawImage(canvasElementCV, 0, 0, dstWidth, dstHeight);
+
+        canvasCtx.restore();
+      }
+    </script>
+  </head>
+
+  <body>
+    <div class="container">
+      <video
+        class="input_video"
+        autoplay
+        playsinline
+        style="position: absolute; display: none"
+      ></video>
+      <canvas id="cv_canvas" style="position: absolute; display: none"></canvas>
+      <canvas id="output_canvas" style="position: absolute"></canvas>
+    </div>
+  </body>
+</html>
